@@ -1,0 +1,96 @@
+from flask import Flask, request, render_template_string
+import requests
+import json
+
+# --- Configuration ---
+OLLAMA_URL = "http://localhost:11434/api/generate"
+PI_BASE_URL = "http://192.168.1.159:30000"  # Replace with your Pi's IP
+
+app = Flask(__name__)
+history = []
+
+HTML_TEMPLATE = """
+<!doctype html>
+<title>MCP Client Chat</title>
+<h2>Talk to the AI to control your Raspberry Pi</h2>
+<form method="post">
+  <input name="message" style="width: 70%%;" autofocus>
+  <button type="submit">Send</button>
+</form>
+<pre>{{ chat_history }}</pre>
+"""
+
+@app.route("/", methods=["GET", "POST"])
+def chat():
+    global history
+
+    if request.method == "POST":
+        user_input = request.form["message"].strip()
+        history.append(f"🧑 You: {user_input}")
+
+        # Step 1: Try to read sensor data from Pi
+        try:
+            sensor = requests.get(f"{PI_BASE_URL}/humidity").json()
+            sensor_data = f"Temperature: {sensor['temperature']}°C, Humidity: {sensor['humidity']}%"
+        except:
+            sensor_data = "Sensor data unavailable"
+
+        # Step 2: Build enriched prompt
+        full_prompt = f"""
+You are a control AI for a Raspberry Pi. Based on the user's instruction and current sensor data, return a list of commands in valid JSON format.
+
+Available actions:
+- "led" with a hex color value like "#FF0000"
+- "lcd" with a short text message
+- "led_index" with a list of objects in the format: [{{"index": 0, "color": "#00FF00"}}, ...]
+
+User instruction: "{user_input}"
+Sensor data: {sensor_data}
+
+Return only a JSON array like:
+[
+  {{"action": "led", "value": "#00FF00"}},
+  {{"action": "lcd", "value": "Temp: 22C"}},
+  {{"action": "led_index", "value": [{{"index": 5, "color": "#0000FF"}}]}}
+]
+"""
+
+        # Step 3: Send to Mistral
+        try:
+            llm = requests.post(OLLAMA_URL, json={
+                "model": "mistral",
+                "prompt": full_prompt,
+                "stream": False
+            })
+
+            llm_text = llm.json()["response"].strip()
+            history.append(f"🤖 Mistral:\n{llm_text}")
+
+            # Step 4: Parse and send commands to the Pi
+            commands = json.loads(llm_text)
+            for cmd in commands:
+                action = cmd.get("action")
+                value = cmd.get("value")
+
+                if action == "led":
+                    requests.post(f"{PI_BASE_URL}/led", data={"color": value})
+                    history.append(f"✅ LED set to {value}")
+
+                elif action == "lcd":
+                    requests.post(f"{PI_BASE_URL}/lcd", data={"message": value})
+                    history.append(f"✅ LCD updated: {value}")
+
+                elif action == "led_index":
+                    r = requests.post(f"{PI_BASE_URL}/led_index", json=value)
+                    history.append(f"✅ LED index command sent: {r.status_code}")
+
+                else:
+                    history.append(f"❓ Unknown action: {action}")
+
+        except Exception as e:
+            history.append(f"❌ Error: {e}")
+
+    return render_template_string(HTML_TEMPLATE, chat_history="\n".join(history[-25:]))
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5050)
