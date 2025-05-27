@@ -1,0 +1,117 @@
+import time
+import board
+import adafruit_dht
+import neopixel
+from flask import Flask, request, jsonify, render_template_string
+from RPLCD.i2c import CharLCD
+
+# -------------------
+# Hardware Setup
+# -------------------
+# DHT11 on GPIO 22
+dht_sensor = adafruit_dht.DHT11(board.D22)
+
+# Neopixel LED ring on GPIO 18
+led_ring = neopixel.NeoPixel(board.D18, 24, brightness=0.3, auto_write=False)
+
+# I2C LCD (adjust address if needed)
+lcd = CharLCD('PCF8574', 0x27)  # Common address; adjust if not correct
+
+# -------------------
+# Flask Setup
+# -------------------
+app = Flask(__name__)
+
+# HTML for Web UI
+HTML_TEMPLATE = """
+<!doctype html>
+<title>MCP Client</title>
+<h2>MCP Client - Raspberry Pi</h2>
+<p>Temperature: {{ temperature }}°C</p>
+<p>Humidity: {{ humidity }}%</p>
+<form action="/led" method="post">
+    <input type="color" name="color">
+    <button type="submit">Set LED Color</button>
+</form>
+<form action="/lcd" method="post">
+    <input type="text" name="message">
+    <button type="submit">Display on LCD</button>
+</form>
+"""
+
+# -------------------
+# Routes
+# -------------------
+@app.route("/")
+def index():
+    try:
+        temp = dht_sensor.temperature
+        humid = dht_sensor.humidity
+    except:
+        temp = humid = "Error"
+    return render_template_string(HTML_TEMPLATE, temperature=temp, humidity=humid)
+
+@app.route("/led", methods=["POST"])
+def set_full_ring_color():
+    try:
+        color_hex = request.form.get("color", "#000000").lstrip("#")
+        r, g, b = tuple(int(color_hex[i:i+2], 16) for i in (0, 2, 4))
+
+        led_ring.fill((r, g, b))
+        led_ring.show()
+        return "LED ring updated", 200
+
+    except Exception as e:
+        return f"Error: {e}", 400
+
+@app.route("/led", methods=["POST"])
+def set_led():
+    color_hex = request.form["color"].lstrip("#")
+    r, g, b = tuple(int(color_hex[i:i+2], 16) for i in (0, 2, 4))
+    led_ring.fill((r, g, b))
+    return "LED color updated. <a href='/'>Go back</a>"
+
+@app.route("/led_index", methods=["POST"])
+def set_individual_leds():
+    try:
+        data = request.get_json()
+        # Clear all LEDs first (optional)
+        led_ring.fill((0, 0, 0))
+
+        # Expecting format: [{"index": 0, "color": "#FF0000"}, ...]
+        for led in data:
+            index = led.get("index")
+            color_hex = led.get("color", "#000000").lstrip("#")
+            r, g, b = tuple(int(color_hex[i:i+2], 16) for i in (0, 2, 4))
+
+            if 0 <= index < len(led_ring):
+                led_ring[index] = (r, g, b)
+
+        led_ring.show()
+        return jsonify({"status": "success"}), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.route("/lcd", methods=["POST"])
+def set_lcd():
+    message = request.form["message"]
+    lcd.clear()
+    lcd.write_string(message[:16])  # 16-char line max
+    return "LCD updated. <a href='/'>Go back</a>"
+
+@app.route("/humidity", methods=["GET"])
+def get_sensor_data():
+    try:
+        temp = dht_sensor.temperature
+        humid = dht_sensor.humidity
+        return jsonify({"temperature": temp, "humidity": humid})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 503
+
+# -------------------
+# Start Server
+# -------------------
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=30000)
