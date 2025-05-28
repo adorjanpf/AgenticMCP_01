@@ -4,7 +4,7 @@ import json
 
 # --- Configuration ---
 OLLAMA_URL = "http://localhost:11434/api/generate"
-PI_BASE_URL = "http://192.168.1.159:30000"  # Replace with your Pi's IP
+PI_BASE_URL = "http://192.168.1.159:30000" 
 
 app = Flask(__name__)
 history = []
@@ -12,7 +12,7 @@ history = []
 HTML_TEMPLATE = """
 <!doctype html>
 <title>MCP Client Chat</title>
-<h2>Talk to the AI to control your Raspberry Pi</h2>
+<h2>Talk to the AI/h2>
 <form method="post">
   <input name="message" style="width: 70%%;" autofocus>
   <button type="submit">Send</button>
